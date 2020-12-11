@@ -44,10 +44,19 @@ type JetStream interface {
 type JetStreamManager interface {
 	// Create a stream.
 	AddStream(cfg *StreamConfig) (*StreamInfo, error)
+	// Update a stream.
+	UpdateStream(cfg *StreamConfig) (*StreamInfo, error)
+	// Delete a stream.
+	DeleteStream(name string) error
 	// Create a consumer.
 	AddConsumer(stream string, cfg *ConsumerConfig) (*ConsumerInfo, error)
+	// Delete a consumer.
+	DeleteConsumer(stream, consumer string) error
+
 	// Stream information.
 	StreamInfo(stream string) (*StreamInfo, error)
+	// Consumer information.
+	ConsumerInfo(stream, durable string) (*ConsumerInfo, error)
 }
 
 // JetStream is the public interface for the JetStream context.
@@ -105,8 +114,7 @@ const (
 	JSDefaultAPIPrefix = "$JS.API."
 	// JSApiAccountInfo is for obtaining general information about JetStream.
 	JSApiAccountInfo = "INFO"
-	// JSApiStreams can lookup a stream by subject.
-	JSApiStreams = "STREAM.NAMES"
+
 	// JSApiConsumerCreateT is used to create consumers.
 	JSApiConsumerCreateT = "CONSUMER.CREATE.%s"
 	// JSApiDurableCreateT is used to create durable consumers.
@@ -114,11 +122,17 @@ const (
 	// JSApiConsumerInfoT is used to create consumers.
 	JSApiConsumerInfoT = "CONSUMER.INFO.%s.%s"
 	// JSApiRequestNextT is the prefix for the request next message(s) for a consumer in worker/pull mode.
-	JSApiRequestNextT = "CONSUMER.MSG.NEXT.%s.%s"
+	JSApiRequestNextT    = "CONSUMER.MSG.NEXT.%s.%s"
+	JSApiConsumerDeleteT = "CONSUMER.DELETE.%s.%s"
+
+	// JSApiStreams can lookup a stream by subject.
+	JSApiStreams = "STREAM.NAMES"
 	// JSApiStreamCreateT is the endpoint to create new streams.
 	JSApiStreamCreateT = "STREAM.CREATE.%s"
 	// JSApiStreamInfoT is the endpoint to get information on a stream.
-	JSApiStreamInfoT = "STREAM.INFO.%s"
+	JSApiStreamInfoT   = "STREAM.INFO.%s"
+	JSApiStreamUpdateT = "STREAM.UPDATE.%s"
+	JSApiStreamDeleteT = "STREAM.DELETE.%s"
 )
 
 // JetStream returns a JetStream context for pub/sub interactions.
@@ -1036,6 +1050,36 @@ func (js *js) AddConsumer(stream string, cfg *ConsumerConfig) (*ConsumerInfo, er
 	return info.ConsumerInfo, nil
 }
 
+// JSApiConsumerDeleteResponse.
+type JSApiConsumerDeleteResponse struct {
+	APIResponse
+	Success bool `json:"success,omitempty"`
+}
+
+func (js *js) DeleteConsumer(stream, durable string) error {
+	if stream == _EMPTY_ {
+		return ErrStreamNameRequired
+	}
+
+	dcSubj := js.apiSubj(fmt.Sprintf(JSApiConsumerDeleteT, stream, durable))
+	r, err := js.nc.Request(dcSubj, nil, js.wait)
+	if err != nil {
+		return err
+	}
+	var resp JSApiConsumerDeleteResponse
+	if err := json.Unmarshal(r.Data, &resp); err != nil {
+		return err
+	}
+	if resp.Error != nil {
+		return errors.New(resp.Error.Description)
+	}
+	return nil
+}
+
+func (js *js) ConsumerInfo(stream, durable string) (*ConsumerInfo, error) {
+	return js.getConsumerInfo(stream, durable)
+}
+
 // StreamConfig will determine the properties for a stream.
 // There are sensible defaults for most. If no subjects are
 // given the name will be used as the only subject.
@@ -1121,6 +1165,59 @@ type StreamState struct {
 	LastSeq   uint64    `json:"last_seq"`
 	LastTime  time.Time `json:"last_ts"`
 	Consumers int       `json:"consumer_count"`
+}
+
+func (js *js) UpdateStream(cfg *StreamConfig) (*StreamInfo, error) {
+	if cfg == nil || cfg.Name == _EMPTY_ {
+		return nil, ErrStreamNameRequired
+	}
+
+	req, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	usSubj := js.apiSubj(fmt.Sprintf(JSApiStreamUpdateT, cfg.Name))
+	r, err := js.nc.Request(usSubj, req, js.wait)
+	if err != nil {
+		return nil, err
+	}
+	var resp JSApiStreamInfoResponse
+	if err := json.Unmarshal(r.Data, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, errors.New(resp.Error.Description)
+	}
+	return resp.StreamInfo, nil
+}
+
+// JSApiStreamDeleteResponse stream removal.
+type JSApiStreamDeleteResponse struct {
+	APIResponse
+	Success bool `json:"success,omitempty"`
+}
+
+const JSApiStreamDeleteResponseType = "io.nats.jetstream.api.v1.stream_delete_response"
+
+func (js *js) DeleteStream(name string) error {
+	if name == _EMPTY_ {
+		return ErrStreamNameRequired
+	}
+
+	dsSubj := js.apiSubj(fmt.Sprintf(JSApiStreamDeleteT, name))
+	r, err := js.nc.Request(dsSubj, nil, js.wait)
+	if err != nil {
+		return err
+	}
+	var resp JSApiStreamDeleteResponse
+	if err := json.Unmarshal(r.Data, &resp); err != nil {
+		return err
+	}
+	if resp.Error != nil {
+		return errors.New(resp.Error.Description)
+	}
+	return nil
 }
 
 // RetentionPolicy determines how messages in a set are retained.
