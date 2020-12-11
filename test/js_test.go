@@ -536,6 +536,16 @@ func TestJetStreamManagement(t *testing.T) {
 		t.Fatalf("StreamInfo is not correct %+v", si)
 	}
 
+	// Update the stream using our client API.
+	prevMaxMsgs := si.Config.MaxMsgs
+	si, err = js.UpdateStream(&nats.StreamConfig{Name: "foo", MaxMsgs: prevMaxMsgs + 100})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if si == nil || si.Config.Name != "foo" || si.Config.MaxMsgs == prevMaxMsgs {
+		t.Fatalf("StreamInfo is not correct %+v", si)
+	}
+
 	// Create a consumer using our client API.
 	ci, err := js.AddConsumer("foo", &nats.ConsumerConfig{Durable: "dlc", AckPolicy: nats.AckExplicit})
 	if err != nil {
@@ -543,6 +553,49 @@ func TestJetStreamManagement(t *testing.T) {
 	}
 	if ci == nil || ci.Name != "dlc" || ci.Stream != "foo" {
 		t.Fatalf("ConsumerInfo is not correct %+v", ci)
+	}
+
+	// Check info calls.
+	ci, err = js.ConsumerInfo("foo", "dlc")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if ci == nil || ci.Config.Durable != "dlc" {
+		t.Fatalf("ConsumerInfo is not correct %+v", si)
+	}
+
+	// Create a snapshot using our client API.
+	inboxSubj := nats.NewInbox()
+	snapshot, err := js.SnapshotStream("foo", &nats.StreamSnapshotConfig{
+		DeliverSubject: inboxSubj,
+		ChunkSize:      1024,
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Delete a consumer using our client API.
+	if err := js.DeleteConsumer("foo", "dlc"); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Delete a stream using our client API.
+	if err := js.DeleteStream("foo"); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Restore a stream using our client API.
+	if err := js.RestoreStream("foo", snapshot); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Check info calls.
+	si, err = js.StreamInfo("foo")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if si == nil || si.Config.Name != "foo" {
+		t.Fatalf("StreamInfo is not correct %+v", si)
 	}
 }
 
